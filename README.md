@@ -268,3 +268,34 @@ if __name__ == "__main__":
             print(f"An unexpected error occurred: {e}")
             speak("An unexpected error occurred. Please try again.")
 
+Features 
+AI-Powered Chat – Uses Google Gemini (Generative AI) for intelligent conversation.
+Voice Commands – Supports speech recognition for hands-free interaction.
+Text-to-Speech (TTS) – Speaks responses using pyttsx3 for a natural interaction.
+Spotify Music Control – Play songs directly via Spotify API.
+Web Automation – Opens websites and performs Google searches.
+App Launcher – Launches applications using system commands.
+Real-time Clock – Retrieves and announces the current time.
+Logging Conversations – Maintains a log of user interactions.
+
+Technologies Used 
+Python – Core programming language
+Google Gemini API – AI chat functionality
+SpeechRecognition – Voice input processing
+Pyttsx3 – Text-to-speech conversion
+Spotipy – Spotify API integration
+PyAutoGUI – App automation
+Webbrowser – URL handling and search execution
+Multithreading – Asynchronous execution for smooth performance
+
+How to Use 
+Clone the repository.
+Install dependencies using pip install -r requirements.txt.
+Set up your API keys in config.py.
+Run python chaos.py.
+Interact via text or voice commands!
+
+Future Enhancements 
+Email and Calendar Integration
+Smart Home Control (IoT devices)
+Better NLP for improved conversation flow
