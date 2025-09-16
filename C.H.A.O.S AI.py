@@ -4,49 +4,98 @@ import webbrowser
 import google.generativeai as genai
 import pyttsx3
 import speech_recognition as sr
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
 import pyautogui
 import time
-from config import apikey
+import os
+import subprocess
+import json
+import psutil
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+
+# Import configuration
+try:
+    from config import (
+        apikey, 
+        SPOTIFY_CLIENT_ID, 
+        SPOTIFY_CLIENT_SECRET, 
+        SPOTIFY_REDIRECT_URI,
+        SPOTIFY_SCOPE,
+        TTS_VOICE_INDEX,
+        TTS_RATE,
+        TTS_VOLUME,
+        AUDIO_TIMEOUT,
+        CHAT_MEMORY_FILE,
+        CONVERSATION_LOG_FILE
+    )
+except ImportError:
+    print("ERROR: config.py not found!")
+    print("Please copy config_template.py to config.py and add your API keys.")
+    exit(1)
 
 # Configure Google Gemini
 genai.configure(api_key=apikey)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-# Initialize text-to-speech engine
+# Initialize text-to-speech engine with config settings
 engine = pyttsx3.init()
 
-# Ensure the speech engine uses the right voice and settings
+# Configure TTS with settings from config
 voices = engine.getProperty('voices')
-engine.setProperty('voice', voices[1].id)  # Choose the first voice, or use voices[1].id for another voice
-engine.setProperty('rate', 150)  # Set speech rate (optional)
-engine.setProperty('volume', 1)  # Set volume level (0.0 to 1.0)
+if len(voices) > TTS_VOICE_INDEX:
+    engine.setProperty('voice', voices[TTS_VOICE_INDEX].id)
+engine.setProperty('rate', TTS_RATE)
+engine.setProperty('volume', TTS_VOLUME)
 
 
 # Function to speak text with interrupt handling
 def speak(text):
+    def speak_text():
+        try:
+            print(f"CHAOS: {text}")
+            engine.say(text)
+            engine.runAndWait()
+        except Exception as e:
+            print(f"Error in TTS: {e}")
+
+    # Run TTS in a separate thread without blocking
+    tts_thread = threading.Thread(target=speak_text)
+    tts_thread.daemon = True
+    tts_thread.start()
+    # Don't wait - return immediately
+
+
+# Chat memory - Enhanced with JSON persistence
+chatStr = ""
+
+
+def load_chat_history():
+    global chatStr
     try:
-        print(f"CHAOS: {text}")  # Debugging: Output text being spoken
-        engine.say(text)
-        engine.runAndWait()  # Run the event loop until speech is done
-    except Exception as e:
-        print(f"Error in TTS: {e}")
+        with open(CHAT_MEMORY_FILE, "r") as file:
+            chatStr = json.load(file)
+    except FileNotFoundError:
+        chatStr = ""
+
+
+def save_chat_history():
+    with open(CHAT_MEMORY_FILE, "w") as file:
+        json.dump(chatStr, file)
+
+
+# Load chat history at startup
+load_chat_history()
 
 
 # Function to log conversations
 def log_conversation(query, response):
-    log_file = "conversation_log.txt"
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(log_file, "a") as file:
+    with open(CONVERSATION_LOG_FILE, "a") as file:
         file.write(f"[{timestamp}] User: {query}\n")
         file.write(f"[{timestamp}] CHAOS: {response}\n\n")
 
 
-# Function to process chat queries
-chatStr = ""  # Initialize global conversation history
-
-
+# Function to process chat queries - Enhanced with persistent memory
 def chat(query):
     global chatStr
     # Append new user input to conversation history
@@ -56,14 +105,16 @@ def chat(query):
         response = model.generate_content(chatStr)  # Use full chat history
         response_text = response.text
         # Append AI response to conversation history
-        chatStr += f"{response_text}\n---\n"
+        chatStr += f"CHAOS: {response_text}\n---\n"
+        save_chat_history()  # Save to persistent storage
         log_conversation(query, response_text)  # Log interaction
         return response_text
 
     except Exception as e:
         error_msg = f"Sorry, I couldn't process the request at the moment: {e}"
         # Append error message to history
-        chatStr += f" {error_msg}\n---\n"
+        chatStr += f"CHAOS: {error_msg}\n---\n"
+        save_chat_history()
         log_conversation(query, error_msg)
         return error_msg
 
@@ -74,7 +125,7 @@ def audio_input():
     with sr.Microphone() as source:
         speak("Listening for up to 5 seconds.")
         try:
-            audio = recognizer.listen(source, timeout=3)
+            audio = recognizer.listen(source, timeout=AUDIO_TIMEOUT)
             query = recognizer.recognize_google(audio)
             print(f"You said: {query}")
             return query
@@ -105,27 +156,25 @@ def play_song(query):
         return
 
     try:
-        # Set up the Spotify client
+        # Set up the Spotify client with config credentials
         sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-            client_id="9786556b4b334d7188e3d82eda591603",
-            client_secret="b5ba5328afe04e2eb9841158cf34d9c2",
-            redirect_uri="https://open.spotify.com/",
-            scope="user-library-read user-read-playback-state user-modify-playback-state"))
+            client_id=SPOTIFY_CLIENT_ID,
+            client_secret=SPOTIFY_CLIENT_SECRET,
+            redirect_uri=SPOTIFY_REDIRECT_URI,
+            scope=SPOTIFY_SCOPE
+        ))
 
         # Search for the song
         results = sp.search(q=song_name, limit=1, type='track')
-        print(f"Spotify search results: {results}")
 
         if not results['tracks']['items']:
             speak(f"Sorry, I couldn't find the song '{song_name}'.")
             return
 
         track = results['tracks']['items'][0]
-        print(f"Found {track['name']} by {track['artists'][0]['name']}. Trying to play it...")
 
         # List available devices
         devices = sp.devices()
-        print(f"Devices found: {devices['devices']}")
 
         # Try to find an active device or use the first available one
         active_device = next((device for device in devices['devices'] if device['is_active']), None)
@@ -138,7 +187,6 @@ def play_song(query):
 
         # Start playback
         sp.start_playback(uris=[track['uri']], device_id=active_device['id'])
-        print("Playback started.")
 
         # Check playback state with retries
         for _ in range(3):
@@ -147,7 +195,6 @@ def play_song(query):
                 speak(f"Playing {track['name']} by {track['artists'][0]['name']}.")
                 return
             else:
-                print("Waiting for playback to start...")
                 time.sleep(2)
 
         speak(f"Failed to start playback of {track['name']} by {track['artists'][0]['name']}.")
@@ -203,6 +250,80 @@ def launch_app_in_background(app_name):
     thread = threading.Thread(target=launch_app)
     thread.daemon = True
     thread.start()
+    # Don't wait for thread to complete - return immediately
+    speak(f"Launching {app_name}.")
+
+
+# Function to launch an application
+def launch_app(app_name):
+    try:
+        subprocess.Popen(app_name)
+        speak(f"Launching {app_name}.")
+    except FileNotFoundError:
+        speak("Application not found.")
+    except Exception as e:
+        speak("An error occurred while launching the application.")
+
+
+# Function to close an application
+def close_application(app_name):
+    try:
+        found = False
+        for proc in psutil.process_iter(attrs=['pid', 'name']):
+            proc_name = proc.info['name'].lower()
+            if app_name.lower() in proc_name or proc_name.startswith(app_name.lower()):
+                try:
+                    os.kill(proc.info['pid'], 9)
+                    speak(f"Closed {proc.info['name']}.")
+                    found = True
+                    break
+                except (psutil.NoSuchProcess, OSError):
+                    continue
+        if not found:
+            speak(f"Application {app_name} not found.")
+    except Exception as e:
+        speak("Error closing the application.")
+
+
+# System control functions
+def control_system(command):
+    if "shutdown" in command:
+        speak("Shutting down.")
+        os.system("shutdown /s /t 5")
+    elif "restart" in command:
+        speak("Restarting.")
+        os.system("shutdown /r /t 5")
+    elif "log off" in command:
+        speak("Logging off.")
+        os.system("shutdown /l")
+    elif "increase volume" in command:
+        def volume_up():
+            for _ in range(5):
+                pyautogui.press("volumeup")
+                time.sleep(0.1)
+
+        thread = threading.Thread(target=volume_up)
+        thread.daemon = True
+        thread.start()
+        speak("Volume increased.")
+    elif "decrease volume" in command:
+        def volume_down():
+            for _ in range(5):
+                pyautogui.press("volumedown")
+                time.sleep(0.1)
+
+        thread = threading.Thread(target=volume_down)
+        thread.daemon = True
+        thread.start()
+        speak("Volume decreased.")
+    elif "mute" in command:
+        def mute_volume():
+            pyautogui.press("volumemute")
+
+        thread = threading.Thread(target=mute_volume)
+        thread.daemon = True
+        thread.start()
+        speak("Muted.")
 
 
 def extract_app_name(input_text):
@@ -213,7 +334,7 @@ def extract_app_name(input_text):
 
 
 # Main loop
-if __name__ == "__main__":
+if _name_ == "_main_":
     print("Welcome to CHAOS AI! Type 'exit' to quit or say 'exit' during audio input.")
     while True:
         try:
@@ -247,6 +368,12 @@ if __name__ == "__main__":
                         launch_app_in_background(app_name)
                     else:
                         speak("I couldn't identify the application name.")
+            elif "close" in process_query:
+                app_name = process_query.replace("close", "").strip()
+                if app_name:
+                    close_application(app_name)
+                else:
+                    speak("Please specify which application to close.")
             elif "search for" in process_query and "on the browser" in process_query:
                 search_query = process_query.replace("search for", "").replace("on the browser", "").strip()
                 if search_query:
@@ -255,10 +382,13 @@ if __name__ == "__main__":
                     speak(response)
                 else:
                     speak("I couldn't understand what to search for.")
-            elif "play" in process_query and "song" in process_query:
+            elif "play" in process_query or "song" in process_query:
                 play_song(process_query)
             elif "the time" in process_query:
                 get_time()
+            elif any(x in process_query for x in
+                     ["shutdown", "restart", "log off", "increase volume", "decrease volume", "mute"]):
+                control_system(process_query)
             else:
                 # Fallback to general chat handling
                 response = chat(process_query)
